@@ -35,6 +35,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 import jp.co.yahoo.yosegi.binary.ColumnBinary;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
+import jp.co.yahoo.yosegi.binary.CompressResultNode;
 import jp.co.yahoo.yosegi.spread.column.IColumn;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
@@ -140,7 +141,7 @@ public class TestDumpFloatColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new DumpFloatColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
 
     assertEquals( columnBinary.columnName , "FLOAT" );
     assertEquals( columnBinary.rowCount , 2 );
@@ -168,7 +169,7 @@ public class TestDumpFloatColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new DumpFloatColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
 
     assertEquals( columnBinary.columnName , "FLOAT" );
     assertEquals( columnBinary.rowCount , 3 );

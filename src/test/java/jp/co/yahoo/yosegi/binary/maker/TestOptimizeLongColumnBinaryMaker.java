@@ -34,6 +34,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
+import jp.co.yahoo.yosegi.binary.CompressResultNode;
 
 import jp.co.yahoo.yosegi.message.objects.ShortObj;
 import jp.co.yahoo.yosegi.message.objects.PrimitiveObject;
@@ -56,7 +57,7 @@ public class TestOptimizeLongColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeLongColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode(), column );
 
     assertEquals( columnBinary.columnName , "SHORT" );
     assertEquals( columnBinary.rowCount , 2 );

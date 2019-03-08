@@ -16,7 +16,7 @@
 
   <groupId>jp.co.yahoo.yosegi</groupId>
   <artifactId>yosegi-legacy</artifactId>
-  <version>0.9.0</version>
+  <version>0.10.0</version>
   <packaging>jar</packaging>
   <name>Yosegi legacy</name>
   <description>Package for backward compatibility.</description>
@@ -71,7 +71,7 @@
     <dependency>
       <groupId>jp.co.yahoo.yosegi</groupId>
       <artifactId>yosegi</artifactId>
-      <version>0.9.0</version>
+      <version>0.10.0</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>

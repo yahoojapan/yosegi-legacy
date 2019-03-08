@@ -37,6 +37,7 @@ import jp.co.yahoo.yosegi.blockindex.BlockIndexNode;
 import jp.co.yahoo.yosegi.binary.ColumnBinary;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
+import jp.co.yahoo.yosegi.binary.CompressResultNode;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
 
@@ -144,7 +145,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
     maker.setBlockIndexNode( new BlockIndexNode() , columnBinary , 0 );
 
     assertEquals( columnBinary.columnName , "STRING" );
@@ -173,7 +174,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
 
     assertEquals( columnBinary.columnName , "STRING" );
     assertEquals( columnBinary.rowCount , 6 );
@@ -201,7 +202,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
     maker.setBlockIndexNode( new BlockIndexNode() , columnBinary , 0 );
   }
 
@@ -215,7 +216,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
 
     assertEquals( columnBinary.columnName , "STRING" );
     assertEquals( columnBinary.rowCount , 2 );
@@ -240,7 +241,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
 
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , column );
+    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
     maker.setBlockIndexNode( new BlockIndexNode() , columnBinary , 0 );
 
     assertEquals( columnBinary.columnName , "STRING" );
