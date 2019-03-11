@@ -21,6 +21,7 @@ package jp.co.yahoo.yosegi.binary.maker;
 import jp.co.yahoo.yosegi.binary.ColumnBinary;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
+import jp.co.yahoo.yosegi.binary.CompressResultNode;
 import jp.co.yahoo.yosegi.binary.maker.index.RangeStringIndex;
 import jp.co.yahoo.yosegi.binary.maker.index.SequentialStringCellIndex;
 import jp.co.yahoo.yosegi.blockindex.BlockIndexNode;
@@ -446,10 +447,11 @@ public class OptimizeIndexDumpStringColumnBinaryMaker implements IColumnBinaryMa
   public ColumnBinary toBinary(
       final ColumnBinaryMakerConfig commonConfig ,
       final ColumnBinaryMakerCustomConfigNode currentConfigNode ,
+      final CompressResultNode compressResultNode ,
       final IColumn column ) throws IOException {
     if ( column.size() == 0 ) {
       return new UnsupportedColumnBinaryMaker()
-          .toBinary( commonConfig , currentConfigNode , column );
+          .toBinary( commonConfig , currentConfigNode , compressResultNode , column );
     }
 
     ColumnBinaryMakerConfig currentConfig = commonConfig;
