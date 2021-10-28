@@ -19,18 +19,10 @@ package jp.co.yahoo.yosegi.binary.maker;
 
 import java.io.IOException;
 
-import java.util.List;
-import java.util.ArrayList;
-
-import java.util.stream.Stream;
-
+import jp.co.yahoo.yosegi.inmemory.YosegiLoaderFactory;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.Arguments;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
@@ -43,9 +35,24 @@ import jp.co.yahoo.yosegi.spread.column.IColumn;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.spread.column.ColumnType;
 import jp.co.yahoo.yosegi.binary.ColumnBinary;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
 
 public class TestOptimizeLongColumnBinaryMaker {
+
+  public IColumn toColumn(final ColumnBinary columnBinary) throws IOException {
+    int loadCount = (columnBinary.isSetLoadSize) ? columnBinary.loadSize : columnBinary.rowCount;
+    return new YosegiLoaderFactory().create(columnBinary, loadCount);
+  }
+
+  public int getLoadSize(final int[] repetitions) {
+    if (repetitions == null) {
+      return 0;
+    }
+    int loadSize = 0;
+    for (int size : repetitions) {
+      loadSize += size;
+    }
+    return loadSize;
+  }
 
   @Test
   public void T_toBinary_1() throws IOException{
@@ -63,7 +70,7 @@ public class TestOptimizeLongColumnBinaryMaker {
     assertEquals( columnBinary.rowCount , 2 );
     assertEquals( columnBinary.columnType , ColumnType.SHORT );
 
-    IColumn decodeColumn = maker.toColumn( columnBinary );
+    IColumn decodeColumn = toColumn(columnBinary);
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
 

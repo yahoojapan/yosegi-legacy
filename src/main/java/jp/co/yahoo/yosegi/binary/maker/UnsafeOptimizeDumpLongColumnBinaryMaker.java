@@ -22,14 +22,15 @@ import jp.co.yahoo.yosegi.binary.ColumnBinary;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
 import jp.co.yahoo.yosegi.binary.CompressResultNode;
-import jp.co.yahoo.yosegi.binary.maker.index.RangeLongIndex;
-import jp.co.yahoo.yosegi.binary.maker.index.SequentialNumberCellIndex;
 import jp.co.yahoo.yosegi.blockindex.BlockIndexNode;
 import jp.co.yahoo.yosegi.blockindex.LongRangeBlockIndex;
 import jp.co.yahoo.yosegi.compressor.CompressResult;
 import jp.co.yahoo.yosegi.compressor.FindCompressor;
 import jp.co.yahoo.yosegi.compressor.ICompressor;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
+import jp.co.yahoo.yosegi.inmemory.IDictionaryLoader;
+import jp.co.yahoo.yosegi.inmemory.ILoader;
+import jp.co.yahoo.yosegi.inmemory.ISequentialLoader;
+import jp.co.yahoo.yosegi.inmemory.LoadType;
 import jp.co.yahoo.yosegi.message.objects.ByteObj;
 import jp.co.yahoo.yosegi.message.objects.IntegerObj;
 import jp.co.yahoo.yosegi.message.objects.LongObj;
@@ -44,18 +45,14 @@ import jp.co.yahoo.yosegi.spread.column.ColumnType;
 import jp.co.yahoo.yosegi.spread.column.ICell;
 import jp.co.yahoo.yosegi.spread.column.IColumn;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveCell;
-import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.util.io.IReadSupporter;
 import jp.co.yahoo.yosegi.util.io.IWriteSupporter;
 import jp.co.yahoo.yosegi.util.io.NumberToBinaryUtils;
 import jp.co.yahoo.yosegi.util.io.unsafe.ByteBufferSupporterFactory;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
 
 public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMaker {
 
@@ -164,16 +161,28 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
         final boolean hasNull ,
         final ByteOrder order ) throws IOException;
 
-    void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException;
+    void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException;
 
+    void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException;
   }
 
   public static class ByteBinaryMaker implements IBinaryMaker {
@@ -218,26 +227,97 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
       IReadSupporter wrapBuffer =
-          ByteBufferSupporterFactory.createReadSupporter( buffer , start , length , order );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == (byte)0 ) {
-          allocator.setByte( i , wrapBuffer.getByte() );
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == (byte) 0) {
+          loader.setByte(i, wrapBuffer.getByte());
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer =
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != (byte) 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == (byte) 0) {
+              wrapBuffer.getByte();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == (byte) 0) {
+          loader.setByteToDic(dictionaryIndex, wrapBuffer.getByte());
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class DiffByteBinaryMaker implements IBinaryMaker {
@@ -290,27 +370,99 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
       IReadSupporter wrapBuffer =
-          ByteBufferSupporterFactory.createReadSupporter( buffer , start , length , order );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0 ) {
-          allocator.setLong(
-              i , NumberToBinaryUtils.getUnsignedByteToLong( wrapBuffer.getByte() ) + min );
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLong(i, NumberToBinaryUtils.getUnsignedByteToLong(wrapBuffer.getByte()) + min);
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer =
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getByte();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLongToDic(
+              dictionaryIndex,
+              NumberToBinaryUtils.getUnsignedByteToLong(wrapBuffer.getByte()) + min);
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class ShortBinaryMaker implements IBinaryMaker {
@@ -355,26 +507,97 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,  
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
       IReadSupporter wrapBuffer =
-          ByteBufferSupporterFactory.createReadSupporter( buffer , start , length , order );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0) {
-          allocator.setShort( i , wrapBuffer.getShort() );
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setShort(i, wrapBuffer.getShort());
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer =
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getShort();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setShortToDic(dictionaryIndex, wrapBuffer.getShort());
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class DiffShortBinaryMaker implements IBinaryMaker {
@@ -427,27 +650,100 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
       IReadSupporter wrapBuffer =
-          ByteBufferSupporterFactory.createReadSupporter( buffer , start , length , order );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0 ) {
-          allocator.setLong(
-              i , NumberToBinaryUtils.getUnsignedShortToLong( wrapBuffer.getShort() ) + min );
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLong(
+              i, NumberToBinaryUtils.getUnsignedShortToLong(wrapBuffer.getShort()) + min);
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer =
+          ByteBufferSupporterFactory.createReadSupporter(buffer, start, length, order);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getShort();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLongToDic(
+              dictionaryIndex,
+              NumberToBinaryUtils.getUnsignedShortToLong(wrapBuffer.getShort()) + min);
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class IntBinaryMaker implements IBinaryMaker {
@@ -497,25 +793,95 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
-      IReadSupporter wrapBuffer = converter.toReadSupporter( buffer , start , length );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0 ) {
-          allocator.setInteger( i , wrapBuffer.getInt() );
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setInteger(i, wrapBuffer.getInt());
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getInt();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setIntegerToDic(dictionaryIndex, wrapBuffer.getInt());
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class DiffIntBinaryMaker implements IBinaryMaker {
@@ -569,26 +935,96 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
-      IReadSupporter wrapBuffer = converter.toReadSupporter( buffer , start , length );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0 ) {
-          allocator.setLong(
-              i , NumberToBinaryUtils.getUnsignedIntToLong( wrapBuffer.getInt() ) + min );
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLong(i, NumberToBinaryUtils.getUnsignedIntToLong(wrapBuffer.getInt()) + min);
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getInt();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLongToDic(
+              dictionaryIndex, NumberToBinaryUtils.getUnsignedIntToLong(wrapBuffer.getInt()) + min);
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   public static class LongBinaryMaker implements IBinaryMaker {
@@ -638,25 +1074,95 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     }
 
     @Override
-    public void loadInMemoryStorage(
-        final byte[] buffer ,
-        final int start ,
-        final int length ,
-        final IMemoryAllocator allocator ,
-        final byte[] isNullArray ,
-        final int size ,
-        final boolean hasNull ,
-        final ByteOrder order ) throws IOException {
-      IReadSupporter wrapBuffer = converter.toReadSupporter( buffer , start , length );
-      for ( int i = 0 ; i < size ; i++ ) {
-        if ( ! hasNull || isNullArray[i] == 0 ) {
-          allocator.setLong( i , wrapBuffer.getLong() );
+    public void setSequentialLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final ISequentialLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+      for (int i = 0; i < size; i++) {
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLong(i, wrapBuffer.getLong());
         } else {
-          allocator.setNull( i );
+          loader.setNull(i);
         }
+      }
+      // NOTE: null padding up to load size.
+      for (int i = size; i < loader.getLoadSize(); i++) {
+        loader.setNull(i);
       }
     }
 
+    @Override
+    public void setDictionaryLoader(
+        final byte[] buffer,
+        final int start,
+        final int length,
+        final byte[] isNullArray,
+        final int size,
+        final boolean hasNull,
+        final ByteOrder order,
+        final int[] repetitions,
+        final IDictionaryLoader loader)
+        throws IOException {
+      IReadSupporter wrapBuffer = converter.toReadSupporter(buffer, start, length);
+
+      // NOTE: Calculate dictionarySize
+      int dictionarySize = 0;
+      int lastIndex = size - 1;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] < 0) {
+          throw new IOException("Repetition must be equal to or greater than 0.");
+        }
+        if (i > lastIndex || repetitions[i] == 0 || (hasNull && isNullArray[i] != 0)) {
+          continue;
+        }
+        dictionarySize++;
+      }
+      loader.createDictionary(dictionarySize);
+
+      // NOTE:
+      //   Set value to dict: dictionaryIndex, value
+      //   Set dictionaryIndex: currentIndex, dictionaryIndex
+      int currentIndex = 0;
+      int dictionaryIndex = 0;
+      for (int i = 0; i < repetitions.length; i++) {
+        if (repetitions[i] == 0) {
+          // NOTE: read skip
+          if (i < size) {
+            if (!hasNull || isNullArray[i] == 0) {
+              wrapBuffer.getLong();
+            }
+          }
+          continue;
+        }
+        if (i > lastIndex) {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+          continue;
+        }
+        if (!hasNull || isNullArray[i] == 0) {
+          loader.setLongToDic(dictionaryIndex, wrapBuffer.getLong());
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+            currentIndex++;
+          }
+          dictionaryIndex++;
+        } else {
+          for (int j = 0; j < repetitions[i]; j++) {
+            loader.setNull(currentIndex);
+            currentIndex++;
+          }
+        }
+      }
+    }
   }
 
   @Override
@@ -788,73 +1294,93 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     return nullBinaryLength + valueLength;
   }
 
+
   @Override
-  public IColumn toColumn( final ColumnBinary columnBinary ) throws IOException {
-    ByteBuffer wrapBuffer = ByteBuffer.wrap(
-        columnBinary.binary ,
-        columnBinary.binaryStart ,
-        columnBinary.binaryLength );
-    Long min = Long.valueOf( wrapBuffer.getLong() );
-    Long max = Long.valueOf( wrapBuffer.getLong() );
-    boolean hasNull = wrapBuffer.get() == (byte)0 ? false : true;
-    ByteOrder order = wrapBuffer.get() == (byte)0
-        ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+  public LoadType getLoadType(final ColumnBinary columnBinary, final int loadSize) {
+    if (columnBinary.isSetLoadSize) {
+      return LoadType.DICTIONARY;
+    }
+    return LoadType.SEQUENTIAL;
+  }
+
+  private void loadFromColumnBinary(final ColumnBinary columnBinary, final ISequentialLoader loader)
+      throws IOException {
+    ByteBuffer wrapBuffer =
+        ByteBuffer.wrap(columnBinary.binary, columnBinary.binaryStart, columnBinary.binaryLength);
+    Long min = Long.valueOf(wrapBuffer.getLong());
+    Long max = Long.valueOf(wrapBuffer.getLong());
+    boolean hasNull = wrapBuffer.get() == (byte) 0 ? false : true;
+    ByteOrder order = wrapBuffer.get() == (byte) 0 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
     int rowCount = wrapBuffer.getInt();
 
-    IBinaryMaker binaryMaker = chooseBinaryMaker( min.longValue() , max.longValue() );
-    return new HeaderIndexLazyColumn(
-        columnBinary.columnName ,
-        columnBinary.columnType ,
-        new ColumnManager(
-          columnBinary ,
-          binaryMaker ,
-          hasNull ,
-          order ,
-          rowCount
-        ) ,
-        new RangeLongIndex( min , max ) );
+    IBinaryMaker binaryMaker = chooseBinaryMaker(min.longValue(), max.longValue());
+
+    int start = columnBinary.binaryStart + (Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES);
+    int length = columnBinary.binaryLength - (Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES);
+
+    ICompressor compressor = FindCompressor.get(columnBinary.compressorClassName);
+    byte[] binary = compressor.decompress(columnBinary.binary, start, length);
+
+    int isNullLength = 0;
+    if (hasNull) {
+      isNullLength = columnBinary.rowCount;
+    }
+    int binaryLength = binaryMaker.calcBinarySize(rowCount);
+
+    binaryMaker.setSequentialLoader(
+        binary, isNullLength, binaryLength, binary, columnBinary.rowCount, hasNull, order, loader);
+  }
+
+  private void loadFromExpandColumnBinary(
+      final ColumnBinary columnBinary, final IDictionaryLoader loader) throws IOException {
+    ByteBuffer wrapBuffer =
+        ByteBuffer.wrap(columnBinary.binary, columnBinary.binaryStart, columnBinary.binaryLength);
+    Long min = Long.valueOf(wrapBuffer.getLong());
+    Long max = Long.valueOf(wrapBuffer.getLong());
+    boolean hasNull = wrapBuffer.get() == (byte) 0 ? false : true;
+    ByteOrder order = wrapBuffer.get() == (byte) 0 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+    int rowCount = wrapBuffer.getInt();
+
+    IBinaryMaker binaryMaker = chooseBinaryMaker(min.longValue(), max.longValue());
+
+    int start = columnBinary.binaryStart + (Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES);
+    int length = columnBinary.binaryLength - (Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES);
+
+    ICompressor compressor = FindCompressor.get(columnBinary.compressorClassName);
+    byte[] binary = compressor.decompress(columnBinary.binary, start, length);
+
+    int isNullLength = 0;
+    if (hasNull) {
+      isNullLength = columnBinary.rowCount;
+    }
+    int binaryLength = binaryMaker.calcBinarySize(rowCount);
+
+    binaryMaker.setDictionaryLoader(
+        binary,
+        isNullLength,
+        binaryLength,
+        binary,
+        columnBinary.rowCount,
+        hasNull,
+        order,
+        columnBinary.repetitions,
+        loader);
   }
 
   @Override
-  public void loadInMemoryStorage(
-      final ColumnBinary columnBinary ,
-      final IMemoryAllocator allocator ) throws IOException {
-    ByteBuffer wrapBuffer = ByteBuffer.wrap(
-        columnBinary.binary ,
-        columnBinary.binaryStart ,
-        columnBinary.binaryLength );
-    Long min = Long.valueOf( wrapBuffer.getLong() );
-    Long max = Long.valueOf( wrapBuffer.getLong() );
-    boolean hasNull = wrapBuffer.get() == (byte)0 ? false : true;
-    ByteOrder order = wrapBuffer.get() == (byte)0
-        ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
-    int rowCount = wrapBuffer.getInt();
-
-    IBinaryMaker binaryMaker = chooseBinaryMaker( min.longValue() , max.longValue() );
-
-    int start = columnBinary.binaryStart + ( Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES );
-    int length = columnBinary.binaryLength - ( Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES );
-
-    ICompressor compressor = FindCompressor.get( columnBinary.compressorClassName );
-    byte[] binary = compressor.decompress( columnBinary.binary , start , length );
-
-    int isNullLength = 0;
-    if ( hasNull ) {
-      isNullLength = columnBinary.rowCount;
+  public void load(final ColumnBinary columnBinary, final ILoader loader) throws IOException {
+    if (columnBinary.isSetLoadSize) {
+      if (loader.getLoaderType() != LoadType.DICTIONARY) {
+        throw new IOException("Loader type is not DICTIONARY.");
+      }
+      loadFromExpandColumnBinary(columnBinary, (IDictionaryLoader) loader);
+    } else {
+      if (loader.getLoaderType() != LoadType.SEQUENTIAL) {
+        throw new IOException("Loader type is not SEQUENTIAL.");
+      }
+      loadFromColumnBinary(columnBinary, (ISequentialLoader) loader);
     }
-    int binaryLength = binaryMaker.calcBinarySize( rowCount );
-
-    binaryMaker.loadInMemoryStorage(
-        binary ,
-        isNullLength ,
-        binaryLength ,
-        allocator ,
-        binary ,
-        columnBinary.rowCount ,
-        hasNull ,
-        order );
-
-    allocator.setValueCount( columnBinary.rowCount );
+    loader.finish();
   }
 
   @Override
@@ -871,123 +1397,4 @@ public class UnsafeOptimizeDumpLongColumnBinaryMaker implements IColumnBinaryMak
     BlockIndexNode currentNode = parentNode.getChildNode( columnBinary.columnName );
     currentNode.setBlockIndex( new LongRangeBlockIndex( min , max ) );
   }
-
-  public class DicManager implements IDicManager {
-
-    private final PrimitiveObject[] dicArray;
-    private final byte[] nullArray;
-    private final boolean hasNull;
-
-    /**
-     * Access in dictionary format.
-     */
-    public DicManager(
-        final PrimitiveObject[] dicArray ,
-        final byte[] nullArray ,
-        final boolean hasNull ) throws IOException {
-      this.dicArray = dicArray;
-      this.nullArray = nullArray;
-      this.hasNull = hasNull;
-    }
-
-    @Override
-    public PrimitiveObject get( final int index ) throws IOException {
-      if ( ! hasNull || nullArray[index] == 0 ) {
-        return dicArray[index];
-      } else {
-        return null;
-      }
-    }
-
-    @Override
-    public int getDicSize() throws IOException {
-      return dicArray.length;
-    }
-
-  }
-
-  public class ColumnManager implements IColumnManager {
-
-    private final ColumnBinary columnBinary;
-    private final IBinaryMaker binaryMaker;
-    private final boolean hasNull;
-    private final ByteOrder order;
-    private final int rowCount;
-
-    private PrimitiveColumn column;
-    private boolean isCreate;
-
-    /**
-     * Create a Column from a given ColumnBinary.
-     */
-    public ColumnManager(
-        final ColumnBinary columnBinary ,
-        final IBinaryMaker binaryMaker ,
-        final boolean hasNull ,
-        final ByteOrder order ,
-        final int rowCount ) {
-      this.columnBinary = columnBinary;
-      this.binaryMaker = binaryMaker;
-      this.hasNull = hasNull;
-      this.order = order;
-      this.rowCount = rowCount;
-    }
-
-    private void create() throws IOException {
-      if ( isCreate ) {
-        return;
-      }
-      int start = columnBinary.binaryStart + ( Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES );
-      int length = columnBinary.binaryLength - ( Long.BYTES * 2 + Byte.BYTES * 2 + Integer.BYTES );
-
-      ICompressor compressor = FindCompressor.get( columnBinary.compressorClassName );
-      byte[] binary = compressor.decompress( columnBinary.binary , start , length );
-
-      int isNullLength = 0;
-      if ( hasNull ) {
-        isNullLength = columnBinary.rowCount;
-      }
-      int binaryLength = binaryMaker.calcBinarySize( rowCount );
-
-      PrimitiveObject[] dicArray = binaryMaker.getPrimitiveArray(
-          binary ,
-          isNullLength ,
-          binaryLength ,
-          columnBinary.rowCount ,
-          hasNull ,
-          order );
-
-      IDicManager dicManager = new DicManager( dicArray , binary , hasNull );
-      column = new PrimitiveColumn( columnBinary.columnType , columnBinary.columnName );
-      column.setCellManager( new BufferDirectCellManager(
-          columnBinary.columnType , dicManager , columnBinary.rowCount ) );
-      column.setIndex( new SequentialNumberCellIndex( columnBinary.columnType , dicManager ) );
-
-      isCreate = true;
-    }
-
-    @Override
-    public IColumn get() {
-      if ( ! isCreate ) {
-        try {
-          create();
-        } catch ( IOException ex ) {
-          throw new UncheckedIOException( ex );
-        }
-      }
-      return column;
-    }
-
-    @Override
-    public List<String> getColumnKeys() {
-      return new ArrayList<String>();
-    }
-
-    @Override
-    public int getColumnSize() {
-      return 0;
-    }
-
-  }
-
 }

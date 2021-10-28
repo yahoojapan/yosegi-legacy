@@ -16,7 +16,7 @@
 
   <groupId>jp.co.yahoo.yosegi</groupId>
   <artifactId>yosegi-legacy</artifactId>
-  <version>0.10.0</version>
+  <version>2.0.0-SNAPSHOT</version>
   <packaging>jar</packaging>
   <name>Yosegi legacy</name>
   <description>Package for backward compatibility.</description>
@@ -78,11 +78,24 @@
     </repository>
   </distributionManagement>
 
+  <repositories>
+    <repository>
+      <id>oss.sonatype.org-snapshot</id>
+      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+      <releases>
+        <enabled>false</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+
   <dependencies>
     <dependency>
       <groupId>jp.co.yahoo.yosegi</groupId>
       <artifactId>yosegi</artifactId>
-      <version>1.2.1</version>
+      <version>2.0.0-SNAPSHOT</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -100,6 +113,13 @@
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter-params</artifactId>
       <version>5.3.2</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.10.0.pr1</version>
+      <optional>true</optional>
       <scope>test</scope>
     </dependency>
   </dependencies>

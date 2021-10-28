@@ -20,23 +20,10 @@ package jp.co.yahoo.yosegi.binary.maker;
 import java.io.IOException;
 import java.nio.*;
 
-import java.util.List;
-import java.util.ArrayList;
-import java.util.stream.Stream;
-
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.Arguments;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
-import jp.co.yahoo.yosegi.binary.ColumnBinary;
-import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
-import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
-import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.util.io.NumberToBinaryUtils;
 
 public class TestUnsafeOptimizeDoubleColumnBinaryMaker{
