@@ -19,17 +19,10 @@ package jp.co.yahoo.yosegi.binary.maker;
 
 import java.io.IOException;
 
-import java.util.List;
-import java.util.ArrayList;
-import java.util.stream.Stream;
-
+import jp.co.yahoo.yosegi.inmemory.YosegiLoaderFactory;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.Arguments;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
@@ -42,95 +35,23 @@ import jp.co.yahoo.yosegi.spread.column.IColumn;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 import jp.co.yahoo.yosegi.spread.column.ColumnType;
 import jp.co.yahoo.yosegi.binary.ColumnBinary;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
 
 public class TestOptimizeDumpLongColumnBinaryMaker {
 
-  private class TestIntegerMemoryAllocator implements IMemoryAllocator{
+  public IColumn toColumn(final ColumnBinary columnBinary) throws IOException {
+    int loadCount = (columnBinary.isSetLoadSize) ? columnBinary.loadSize : columnBinary.rowCount;
+    return new YosegiLoaderFactory().create(columnBinary, loadCount);
+  }
 
-    public final long[] longArray;
-    public final boolean[] nullArray;
-
-    public TestIntegerMemoryAllocator(){
-      longArray = new long[6];
-      nullArray = new boolean[6];
-    }
-
-    @Override
-    public void setNull( final int index ){
-      nullArray[index] = true;
-    }
-
-    @Override
-    public void setBoolean( final int index , final boolean value ) throws IOException{
-    }
-
-    @Override
-    public void setByte( final int index , final byte value ) throws IOException{
-      longArray[index] = value;
-    }
-
-    @Override
-    public void setShort( final int index , final short value ) throws IOException{
-      longArray[index] = value;
-    }
-
-    @Override
-    public void setInteger( final int index , final int value ) throws IOException{
-      longArray[index] = value;
-    }
-
-    @Override
-    public void setLong( final int index , final long value ) throws IOException{
-      longArray[index] = value;
-    }
-
-    @Override
-    public void setFloat( final int index , final float value ) throws IOException{
-    }
-
-    @Override
-    public void setDouble( final int index , final double value ) throws IOException{
-    }
-
-    @Override
-    public void setBytes( final int index , final byte[] value ) throws IOException{
-    }
-
-    @Override
-    public void setBytes( final int index , final byte[] value , final int start , final int length ) throws IOException{
-    }
-
-    @Override
-    public void setString( final int index , final String value ) throws IOException{
-    }
-
-    @Override
-    public void setString( final int index , final char[] value ) throws IOException{
-    }
-
-    @Override
-    public void setString( final int index , final char[] value , final int start , final int length ) throws IOException{
-    }
-
-    @Override
-    public void setValueCount( final int index ) throws IOException{
-
-    }
-
-    @Override
-    public int getValueCount() throws IOException{
+  public int getLoadSize(final int[] repetitions) {
+    if (repetitions == null) {
       return 0;
     }
-
-    @Override
-    public void setArrayIndex( final int index , final int start , final int end ) throws IOException{
+    int loadSize = 0;
+    for (int size : repetitions) {
+      loadSize += size;
     }
-
-    @Override
-    public IMemoryAllocator getChild( final String columnName , final ColumnType type ) throws IOException{
-      return null;
-    }
+    return loadSize;
   }
 
   @Test
@@ -150,7 +71,7 @@ public class TestOptimizeDumpLongColumnBinaryMaker {
     assertEquals( columnBinary.rowCount , 6 );
     assertEquals( columnBinary.columnType , ColumnType.SHORT );
 
-    IColumn decodeColumn = maker.toColumn( columnBinary );
+    IColumn decodeColumn = toColumn(columnBinary);
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
 
@@ -180,7 +101,7 @@ public class TestOptimizeDumpLongColumnBinaryMaker {
     assertEquals( columnBinary.rowCount , 6 );
     assertEquals( columnBinary.columnType , ColumnType.INTEGER );
 
-    IColumn decodeColumn = maker.toColumn( columnBinary );
+    IColumn decodeColumn = toColumn( columnBinary );
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
 
@@ -192,32 +113,4 @@ public class TestOptimizeDumpLongColumnBinaryMaker {
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
   }
-
-  @Test
-  public void T_loadInMemoryStorage_1() throws IOException{
-    IColumn column = new PrimitiveColumn( ColumnType.INTEGER , "INTEGER" );
-    column.add( ColumnType.INTEGER , new IntegerObj( 10 ) , 0 );
-    column.add( ColumnType.INTEGER , new IntegerObj( 2 ) , 1 );
-    column.add( ColumnType.INTEGER , new IntegerObj( 6 ) , 5 );
-
-    ColumnBinaryMakerConfig defaultConfig = new ColumnBinaryMakerConfig();
-    ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
-
-    IColumnBinaryMaker maker = new OptimizeDumpLongColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
-
-    assertEquals( columnBinary.columnName , "INTEGER" );
-    assertEquals( columnBinary.rowCount , 6 );
-    assertEquals( columnBinary.columnType , ColumnType.INTEGER );
-
-    TestIntegerMemoryAllocator allocator = new TestIntegerMemoryAllocator();
-    maker.loadInMemoryStorage( columnBinary , allocator );
-    assertEquals( 10 , allocator.longArray[0] );
-    assertEquals( 2 , allocator.longArray[1] );
-    assertTrue( allocator.nullArray[2] );
-    assertTrue( allocator.nullArray[3] );
-    assertTrue( allocator.nullArray[4] );
-    assertEquals( 6 , allocator.longArray[5] );
-  }
-
 }

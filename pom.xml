@@ -16,7 +16,7 @@
 
   <groupId>jp.co.yahoo.yosegi</groupId>
   <artifactId>yosegi-legacy</artifactId>
-  <version>0.10.0</version>
+  <version>2.0.0-SNAPSHOT</version>
   <packaging>jar</packaging>
   <name>Yosegi legacy</name>
   <description>Package for backward compatibility.</description>
@@ -78,11 +78,24 @@
     </repository>
   </distributionManagement>
 
+  <repositories>
+    <repository>
+      <id>oss.sonatype.org-snapshot</id>
+      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+      <releases>
+        <enabled>false</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+
   <dependencies>
     <dependency>
       <groupId>jp.co.yahoo.yosegi</groupId>
       <artifactId>yosegi</artifactId>
-      <version>1.2.1</version>
+      <version>2.0.0-SNAPSHOT</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -102,6 +115,13 @@
       <version>5.3.2</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.10.0.pr1</version>
+      <optional>true</optional>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -113,7 +133,7 @@
           <useSystemClassLoader>false</useSystemClassLoader>
           <forkCount>2</forkCount>
           <reuseForks>true</reuseForks>
-          <argLine>-Xmx1536m -XX:MaxPermSize=512m</argLine>
+          <argLine>@{surefireArgLine} -Xmx1536m -XX:MaxPermSize=512m</argLine>
         </configuration>
         <dependencies>
           <dependency>
@@ -160,7 +180,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>
-        <version>2.10.1</version>
+        <version>3.1.0</version>
         <configuration>
           <show>package</show>
           <source>1.8</source>
@@ -180,40 +200,19 @@
           </execution>
         </executions>
       </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-gpg-plugin</artifactId>
-        <version>1.5</version>
-        <executions>
-          <execution>
-            <id>sign-artifacts</id>
-            <phase>verify</phase>
-            <goals>
-              <goal>sign</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <groupId>org.sonatype.plugins</groupId>
-        <artifactId>nexus-staging-maven-plugin</artifactId>
-        <version>1.6.7</version>
-        <extensions>true</extensions>
-        <configuration>
-          <serverId>ossrh</serverId>
-          <nexusUrl>https://oss.sonatype.org/</nexusUrl>
-          <autoReleaseAfterClose>true</autoReleaseAfterClose>
-        </configuration>
-      </plugin>
 
       <plugin>
         <groupId>org.apache.rat</groupId>
         <artifactId>apache-rat-plugin</artifactId>
+        <version>0.13</version>
         <configuration>
           <excludes>
+            <exclude>jars/**/*</exclude>
             <exclude>**/*.json</exclude>
+            <exclude>**/*.txt</exclude>
+            <exclude>**/*.template</exclude>
             <exclude>.gitignore</exclude>
-            <exclude>.circleci/config.yml</exclude>
+            <exclude>.circleci/*</exclude>
             <exclude>.github/PULL_REQUEST_TEMPLATE.md</exclude>
           </excludes>
         </configuration>
@@ -238,6 +237,49 @@
           <outputFile>${project.build.directory}/site/checkstyle/checkstyle-result.xml</outputFile>
         </configuration>
       </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>0.8.6</version>
+        <executions>
+          <execution>
+            <id>jacoco-initialize</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>jacoco-report</id>
+            <phase>prepare-package</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>post-unit-test</id>
+            <phase>test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+            <configuration>
+              <dataFile>target/jacoco.exec</dataFile>
+              <outputDirectory>target/jacoco-ut</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+        <configuration>
+          <propertyName>surefireArgLine</propertyName>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-release-plugin</artifactId>
+        <version>2.5.3</version>
+        <configuration>
+          <releaseProfiles>gpg-sign</releaseProfiles>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 
@@ -259,4 +301,38 @@
     </plugins>
   </reporting>
 
+  <profiles>
+    <profile>
+      <id>gpg-sign</id>
+      <!--
+      only sign during deploy phase
+      -->
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>1.5</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+                <configuration>
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+      <properties>
+        <gpg.passphrase>${env.GPG_PASSPHRASE}</gpg.passphrase>
+      </properties>
+    </profile>
+  </profiles>
 </project>

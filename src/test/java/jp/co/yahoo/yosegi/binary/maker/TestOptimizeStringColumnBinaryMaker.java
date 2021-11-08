@@ -19,18 +19,10 @@ package jp.co.yahoo.yosegi.binary.maker;
 
 import java.io.IOException;
 
-import java.util.List;
-import java.util.ArrayList;
-
-import java.util.stream.Stream;
-
+import jp.co.yahoo.yosegi.inmemory.YosegiLoaderFactory;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.Arguments;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import jp.co.yahoo.yosegi.blockindex.BlockIndexNode;
 
@@ -39,7 +31,6 @@ import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
 import jp.co.yahoo.yosegi.binary.CompressResultNode;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
 
 import jp.co.yahoo.yosegi.message.objects.StringObj;
 import jp.co.yahoo.yosegi.message.objects.PrimitiveObject;
@@ -50,89 +41,20 @@ import jp.co.yahoo.yosegi.spread.column.ColumnType;
 
 public class TestOptimizeStringColumnBinaryMaker {
 
-  private class TestStringMemoryAllocator implements IMemoryAllocator{
+  public IColumn toColumn(final ColumnBinary columnBinary) throws IOException {
+    int loadCount = (columnBinary.isSetLoadSize) ? columnBinary.loadSize : columnBinary.rowCount;
+    return new YosegiLoaderFactory().create(columnBinary, loadCount);
+  }
 
-    public final List<String> list;
-
-    public TestStringMemoryAllocator(){
-      list = new ArrayList<String>();
-      for( int i = 0 ; i < 6 ; i++ ){
-        list.add( null );
-      }
-    }
-
-    @Override
-    public void setNull( final int index ){
-    }
-
-    @Override
-    public void setBoolean( final int index , final boolean value ) throws IOException{
-    }
-
-    @Override
-    public void setByte( final int index , final byte value ) throws IOException{
-    }
-
-    @Override
-    public void setShort( final int index , final short value ) throws IOException{
-    }
-
-    @Override
-    public void setInteger( final int index , final int value ) throws IOException{
-    }
-
-    @Override
-    public void setLong( final int index , final long value ) throws IOException{
-    }
-
-    @Override
-    public void setFloat( final int index , final float value ) throws IOException{
-    }
-
-    @Override
-    public void setDouble( final int index , final double value ) throws IOException{
-    }
-
-    @Override
-    public void setBytes( final int index , final byte[] value ) throws IOException{
-      list.set( index , new String( value , "UTF-8" ) );
-    }
-
-    @Override
-    public void setBytes( final int index , final byte[] value , final int start , final int length ) throws IOException{
-      list.set( index , new String( value , start , length , "UTF-8" ) );
-    }
-
-    @Override
-    public void setString( final int index , final String value ) throws IOException{
-    }
-
-    @Override
-    public void setString( final int index , final char[] value ) throws IOException{
-    }
-
-    @Override
-    public void setString( final int index , final char[] value , final int start , final int length ) throws IOException{
-    }
-
-    @Override
-    public void setValueCount( final int index ) throws IOException{
-
-    }
-
-    @Override
-    public int getValueCount() throws IOException{
+  public int getLoadSize(final int[] repetitions) {
+    if (repetitions == null) {
       return 0;
     }
-
-    @Override
-    public void setArrayIndex( final int index , final int start , final int end ) throws IOException{
+    int loadSize = 0;
+    for (int size : repetitions) {
+      loadSize += size;
     }
-
-    @Override
-    public IMemoryAllocator getChild( final String columnName , final ColumnType type ) throws IOException{
-      return null;
-    }
+    return loadSize;
   }
 
   @Test
@@ -152,7 +74,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     assertEquals( columnBinary.rowCount , 2 );
     assertEquals( columnBinary.columnType , ColumnType.STRING );
 
-    IColumn decodeColumn = maker.toColumn( columnBinary );
+    IColumn decodeColumn = toColumn(columnBinary);
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
 
@@ -180,7 +102,7 @@ public class TestOptimizeStringColumnBinaryMaker {
     assertEquals( columnBinary.rowCount , 6 );
     assertEquals( columnBinary.columnType , ColumnType.STRING );
 
-    IColumn decodeColumn = maker.toColumn( columnBinary );
+    IColumn decodeColumn = toColumn(columnBinary);
     assertEquals( decodeColumn.getColumnKeys().size() , 0 );
     assertEquals( decodeColumn.getColumnSize() , 0 );
 
@@ -204,59 +126,6 @@ public class TestOptimizeStringColumnBinaryMaker {
     IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
     ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
     maker.setBlockIndexNode( new BlockIndexNode() , columnBinary , 0 );
-  }
-
-  @Test
-  public void T_loadInMemoryStorage_1() throws IOException{
-    IColumn column = new PrimitiveColumn( ColumnType.STRING , "STRING" );
-    column.add( ColumnType.STRING , new StringObj( "a" ) , 0 );
-    column.add( ColumnType.STRING , new StringObj( "b" ) , 1 );
-
-    ColumnBinaryMakerConfig defaultConfig = new ColumnBinaryMakerConfig();
-    ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
-
-    IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
-
-    assertEquals( columnBinary.columnName , "STRING" );
-    assertEquals( columnBinary.rowCount , 2 );
-    assertEquals( columnBinary.columnType , ColumnType.STRING );
-
-    TestStringMemoryAllocator allocator = new TestStringMemoryAllocator();
-    maker.loadInMemoryStorage( columnBinary , allocator );
-
-    assertEquals( allocator.list.get(0) , "a" );
-    assertEquals( allocator.list.get(1) , "b" );
-  }
-
-  @Test
-  public void T_loadInMemoryStorage_2() throws IOException{
-    IColumn column = new PrimitiveColumn( ColumnType.STRING , "STRING" );
-    column.add( ColumnType.STRING , new StringObj( "aaaaa" ) , 0 );
-    column.add( ColumnType.STRING , new StringObj( "b" ) , 1 );
-    column.add( ColumnType.STRING , new StringObj( "" ) , 2 );
-    column.add( ColumnType.STRING , new StringObj( "cccccc" ) , 5 );
-
-    ColumnBinaryMakerConfig defaultConfig = new ColumnBinaryMakerConfig();
-    ColumnBinaryMakerCustomConfigNode configNode = new ColumnBinaryMakerCustomConfigNode( "root" , defaultConfig );
-
-    IColumnBinaryMaker maker = new OptimizeStringColumnBinaryMaker();
-    ColumnBinary columnBinary = maker.toBinary( defaultConfig , null , new CompressResultNode() , column );
-    maker.setBlockIndexNode( new BlockIndexNode() , columnBinary , 0 );
-
-    assertEquals( columnBinary.columnName , "STRING" );
-    assertEquals( columnBinary.rowCount , 6 );
-    assertEquals( columnBinary.columnType , ColumnType.STRING );
-
-    TestStringMemoryAllocator allocator = new TestStringMemoryAllocator();
-    maker.loadInMemoryStorage( columnBinary , allocator );
-
-    assertEquals( allocator.list.get(0) , "aaaaa" );
-    assertEquals( allocator.list.get(1) , "b" );
-    assertEquals( allocator.list.get(2) , "" );
-    assertEquals( allocator.list.get(3) , null );
-    assertEquals( allocator.list.get(4) , null );
-    assertEquals( allocator.list.get(5) , "cccccc" );
   }
 
   @Test

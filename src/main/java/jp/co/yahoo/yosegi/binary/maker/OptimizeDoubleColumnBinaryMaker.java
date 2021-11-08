@@ -22,13 +22,14 @@ import jp.co.yahoo.yosegi.binary.ColumnBinary;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerConfig;
 import jp.co.yahoo.yosegi.binary.ColumnBinaryMakerCustomConfigNode;
 import jp.co.yahoo.yosegi.binary.CompressResultNode;
-import jp.co.yahoo.yosegi.binary.maker.index.BufferDirectSequentialNumberCellIndex;
-import jp.co.yahoo.yosegi.binary.maker.index.RangeDoubleIndex;
 import jp.co.yahoo.yosegi.blockindex.BlockIndexNode;
 import jp.co.yahoo.yosegi.blockindex.DoubleRangeBlockIndex;
 import jp.co.yahoo.yosegi.compressor.FindCompressor;
 import jp.co.yahoo.yosegi.compressor.ICompressor;
-import jp.co.yahoo.yosegi.inmemory.IMemoryAllocator;
+import jp.co.yahoo.yosegi.inmemory.IDictionaryLoader;
+import jp.co.yahoo.yosegi.inmemory.ILoader;
+import jp.co.yahoo.yosegi.inmemory.ISequentialLoader;
+import jp.co.yahoo.yosegi.inmemory.LoadType;
 import jp.co.yahoo.yosegi.message.objects.DoubleObj;
 import jp.co.yahoo.yosegi.message.objects.PrimitiveObject;
 import jp.co.yahoo.yosegi.spread.analyzer.DoubleColumnAnalizeResult;
@@ -37,10 +38,8 @@ import jp.co.yahoo.yosegi.spread.column.ColumnType;
 import jp.co.yahoo.yosegi.spread.column.ICell;
 import jp.co.yahoo.yosegi.spread.column.IColumn;
 import jp.co.yahoo.yosegi.spread.column.PrimitiveCell;
-import jp.co.yahoo.yosegi.spread.column.PrimitiveColumn;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
@@ -335,56 +334,137 @@ public class OptimizeDoubleColumnBinaryMaker implements IColumnBinaryMaker {
   }
 
   @Override
-  public IColumn toColumn( final ColumnBinary columnBinary ) throws IOException {
-    ByteBuffer wrapBuffer = ByteBuffer.wrap(
-        columnBinary.binary , columnBinary.binaryStart , columnBinary.binaryLength );
-    Double min = Double.valueOf( wrapBuffer.getDouble() );
-    Double max = Double.valueOf( wrapBuffer.getDouble() );
+  public LoadType getLoadType(final ColumnBinary columnBinary, final int loadSize) {
+    if (columnBinary.isSetLoadSize) {
+      return LoadType.DICTIONARY;
+    }
+    return LoadType.SEQUENTIAL;
+  }
 
-    IDictionaryIndexMaker indexMaker = chooseDictionaryIndexMaker( columnBinary.rowCount );
-    IDictionaryMaker dicMaker = chooseDictionaryMaker( min.doubleValue() , max.doubleValue() );
-    return new HeaderIndexLazyColumn(
-        columnBinary.columnName ,
-        columnBinary.columnType ,
-        new ColumnManager(
-          columnBinary ,
-          indexMaker ,
-          dicMaker
-        ) ,
-        new RangeDoubleIndex( min , max ) );
+  private void loadFromColumnBinary(final ColumnBinary columnBinary, final ISequentialLoader loader)
+      throws IOException {
+    ByteBuffer wrapBuffer =
+        ByteBuffer.wrap(columnBinary.binary, columnBinary.binaryStart, columnBinary.binaryLength);
+    Double min = Double.valueOf(wrapBuffer.getDouble());
+    Double max = Double.valueOf(wrapBuffer.getDouble());
+
+    IDictionaryIndexMaker indexMaker = chooseDictionaryIndexMaker(columnBinary.rowCount);
+    IDictionaryMaker dicMaker = chooseDictionaryMaker(min.doubleValue(), max.doubleValue());
+
+    int start = columnBinary.binaryStart + (Double.BYTES * 2);
+    int length = columnBinary.binaryLength - (Double.BYTES * 2);
+
+    ICompressor compressor = FindCompressor.get(columnBinary.compressorClassName);
+    byte[] binary = compressor.decompress(columnBinary.binary, start, length);
+
+    int indexLength = indexMaker.calcBinarySize(columnBinary.rowCount);
+    int dicLength = dicMaker.calcBinarySize(columnBinary.cardinality);
+
+    IntBuffer indexIntBuffer = indexMaker.getIndexIntBuffer(binary, 0, indexLength);
+    PrimitiveObject[] dicArray = dicMaker.getDicPrimitiveArray(binary, indexLength, dicLength);
+
+    for (int i = 0; i < columnBinary.rowCount; i++) {
+      int dicIndex = indexIntBuffer.get();
+      if (dicIndex != 0) {
+        loader.setDouble(i, dicArray[dicIndex].getDouble());
+      } else {
+        loader.setNull(i);
+      }
+    }
+    // NOTE: null padding up to load size.
+    for (int i = columnBinary.rowCount; i < loader.getLoadSize(); i++) {
+      loader.setNull(i);
+    }
+  }
+
+  private void loadFromExpandColumnBinary(
+      final ColumnBinary columnBinary, final IDictionaryLoader loader) throws IOException {
+    ByteBuffer wrapBuffer =
+        ByteBuffer.wrap(columnBinary.binary, columnBinary.binaryStart, columnBinary.binaryLength);
+    Double min = Double.valueOf(wrapBuffer.getDouble());
+    Double max = Double.valueOf(wrapBuffer.getDouble());
+
+    IDictionaryIndexMaker indexMaker = chooseDictionaryIndexMaker(columnBinary.rowCount);
+    IDictionaryMaker dicMaker = chooseDictionaryMaker(min.doubleValue(), max.doubleValue());
+
+    int start = columnBinary.binaryStart + (Double.BYTES * 2);
+    int length = columnBinary.binaryLength - (Double.BYTES * 2);
+
+    ICompressor compressor = FindCompressor.get(columnBinary.compressorClassName);
+    byte[] binary = compressor.decompress(columnBinary.binary, start, length);
+
+    int indexLength = indexMaker.calcBinarySize(columnBinary.rowCount);
+    int dicLength = dicMaker.calcBinarySize(columnBinary.cardinality);
+
+    IntBuffer indexIntBuffer = indexMaker.getIndexIntBuffer(binary, 0, indexLength);
+    PrimitiveObject[] dicArray = dicMaker.getDicPrimitiveArray(binary, indexLength, dicLength);
+
+    // NOTE: Calculate dictionarySize
+    int dictionarySize = 0;
+    int lastIndex = columnBinary.rowCount - 1;
+    for (int i = 0; i < columnBinary.repetitions.length; i++) {
+      if (columnBinary.repetitions[i] < 0) {
+        throw new IOException("Repetition must be equal to or greater than 0.");
+      }
+      if (i > lastIndex || indexIntBuffer.get() == 0 || columnBinary.repetitions[i] == 0) {
+        continue;
+      }
+      dictionarySize++;
+    }
+    loader.createDictionary(dictionarySize);
+    // NOTE: reset indexIntBuffer
+    indexIntBuffer = indexMaker.getIndexIntBuffer(binary, 0, indexLength);
+
+    // NOTE:
+    //   Set valut to dict: dictionaryIndex, dicArray[dicIndex].getDouble()
+    //   Set dictionaryIndex: currentIndex, dictionaryIndex
+    int currentIndex = 0;
+    int dictionaryIndex = 0;
+    for (int i = 0; i < columnBinary.repetitions.length; i++) {
+      if (columnBinary.repetitions[i] == 0) {
+        if (i < columnBinary.rowCount) {
+          indexIntBuffer.get();
+        }
+        continue;
+      }
+      if (i > lastIndex) {
+        for (int j = 0; j < columnBinary.repetitions[i]; j++) {
+          loader.setNull(currentIndex);
+          currentIndex++;
+        }
+        continue;
+      }
+      int dicIndex = indexIntBuffer.get();
+      if (dicIndex != 0) {
+        loader.setDoubleToDic(dictionaryIndex, dicArray[dicIndex].getDouble());
+        for (int j = 0; j < columnBinary.repetitions[i]; j++) {
+          loader.setDictionaryIndex(currentIndex, dictionaryIndex);
+          currentIndex++;
+        }
+        dictionaryIndex++;
+      } else {
+        for (int j = 0; j < columnBinary.repetitions[i]; j ++) {
+          loader.setNull(currentIndex);
+          currentIndex++;
+        }
+      }
+    }
   }
 
   @Override
-  public void loadInMemoryStorage(
-      final ColumnBinary columnBinary ,
-      final IMemoryAllocator allocator ) throws IOException {
-    ByteBuffer wrapBuffer = ByteBuffer.wrap(
-        columnBinary.binary , columnBinary.binaryStart , columnBinary.binaryLength );
-    Double min = Double.valueOf( wrapBuffer.getDouble() );
-    Double max = Double.valueOf( wrapBuffer.getDouble() );
-
-    IDictionaryIndexMaker indexMaker = chooseDictionaryIndexMaker( columnBinary.rowCount );
-    IDictionaryMaker dicMaker = chooseDictionaryMaker( min.doubleValue() , max.doubleValue() );
-
-    int start = columnBinary.binaryStart + ( Double.BYTES * 2 );
-    int length = columnBinary.binaryLength - ( Double.BYTES * 2 );
-
-    ICompressor compressor = FindCompressor.get( columnBinary.compressorClassName );
-    byte[] binary = compressor.decompress( columnBinary.binary , start , length );
-
-    int indexLength = indexMaker.calcBinarySize( columnBinary.rowCount );
-    int dicLength = dicMaker.calcBinarySize( columnBinary.cardinality );
-
-    IntBuffer indexIntBuffer = indexMaker.getIndexIntBuffer( binary , 0 , indexLength );
-    PrimitiveObject[] dicArray = dicMaker.getDicPrimitiveArray( binary , indexLength , dicLength );
-
-    for ( int i = 0 ; i < columnBinary.rowCount ; i++ ) {
-      int dicIndex = indexIntBuffer.get();
-      if ( dicIndex != 0 ) {
-        allocator.setDouble( i , dicArray[dicIndex].getDouble() );
+  public void load(final ColumnBinary columnBinary, final ILoader loader) throws IOException {
+    if (columnBinary.isSetLoadSize) {
+      if (loader.getLoaderType() != LoadType.DICTIONARY) {
+        throw new IOException("Loader type is not DICTIONARY.");
       }
+      loadFromExpandColumnBinary(columnBinary, (IDictionaryLoader) loader);
+    } else {
+      if (loader.getLoaderType() != LoadType.SEQUENTIAL) {
+        throw new IOException("Loader type is not SEQUENTIAL.");
+      }
+      loadFromColumnBinary(columnBinary, (ISequentialLoader) loader);
     }
-    allocator.setValueCount( columnBinary.rowCount );
+    loader.finish();
   }
 
   @Override
@@ -399,97 +479,4 @@ public class OptimizeDoubleColumnBinaryMaker implements IColumnBinaryMaker {
     BlockIndexNode currentNode = parentNode.getChildNode( columnBinary.columnName );
     currentNode.setBlockIndex( new DoubleRangeBlockIndex( min , max ) );
   }
-
-  public class DicManager implements IDicManager {
-
-    private final PrimitiveObject[] dicArray;
-
-    public DicManager( final PrimitiveObject[] dicArray ) throws IOException {
-      this.dicArray = dicArray;
-    }
-
-    @Override
-    public PrimitiveObject get( final int index ) throws IOException {
-      return dicArray[index];
-    }
-
-    @Override
-    public int getDicSize() throws IOException {
-      return dicArray.length;
-    }
-
-  }
-
-  public class ColumnManager implements IColumnManager {
-
-    private final ColumnBinary columnBinary;
-    private final IDictionaryIndexMaker indexMaker;
-    private final IDictionaryMaker dicMaker;
-
-    private PrimitiveColumn column;
-    private boolean isCreate;
-
-    /**
-     * Initialize by setting binary.
-     */
-    public ColumnManager(
-        final ColumnBinary columnBinary ,
-        final IDictionaryIndexMaker indexMaker ,
-        final IDictionaryMaker dicMaker ) {
-      this.columnBinary = columnBinary;
-      this.indexMaker = indexMaker;
-      this.dicMaker = dicMaker;
-    }
-
-    private void create() throws IOException {
-      if ( isCreate ) {
-        return;
-      }
-      int start = columnBinary.binaryStart + ( Double.BYTES * 2 );
-      int length = columnBinary.binaryLength - ( Double.BYTES * 2 );
-
-      ICompressor compressor = FindCompressor.get( columnBinary.compressorClassName );
-      byte[] binary = compressor.decompress( columnBinary.binary , start , length );
-
-      int indexLength = indexMaker.calcBinarySize( columnBinary.rowCount );
-      int dicLength = dicMaker.calcBinarySize( columnBinary.cardinality );
-
-      IntBuffer indexIntBuffer = indexMaker.getIndexIntBuffer( binary , 0 , indexLength );
-      PrimitiveObject[] dicArray =
-          dicMaker.getDicPrimitiveArray( binary , indexLength , dicLength );
-
-      IDicManager dicManager = new DicManager( dicArray );
-      column = new PrimitiveColumn( columnBinary.columnType , columnBinary.columnName );
-      column.setCellManager( new BufferDirectDictionaryLinkCellManager(
-          columnBinary.columnType , dicManager , indexIntBuffer ) );
-      column.setIndex( new BufferDirectSequentialNumberCellIndex(
-          columnBinary.columnType , dicManager , indexIntBuffer ) );
-
-      isCreate = true;
-    }
-
-    @Override
-    public IColumn get() {
-      if ( ! isCreate ) {
-        try {
-          create();
-        } catch ( IOException ex ) {
-          throw new UncheckedIOException( ex );
-        }
-      }
-      return column;
-    }
-
-    @Override
-    public List<String> getColumnKeys() {
-      return new ArrayList<String>();
-    }
-
-    @Override
-    public int getColumnSize() {
-      return 0;
-    }
-
-  }
-
 }
