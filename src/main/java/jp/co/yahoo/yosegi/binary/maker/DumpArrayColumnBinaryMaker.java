@@ -28,6 +28,7 @@ import jp.co.yahoo.yosegi.compressor.FindCompressor;
 import jp.co.yahoo.yosegi.compressor.ICompressor;
 import jp.co.yahoo.yosegi.inmemory.IArrayLoader;
 import jp.co.yahoo.yosegi.inmemory.ILoader;
+import jp.co.yahoo.yosegi.inmemory.IRunLengthEncodingArrayLoader;
 import jp.co.yahoo.yosegi.inmemory.LoadType;
 import jp.co.yahoo.yosegi.spread.analyzer.IColumnAnalizeResult;
 import jp.co.yahoo.yosegi.spread.column.ArrayCell;
@@ -114,6 +115,9 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
 
   @Override
   public LoadType getLoadType(final ColumnBinary columnBinary, final int loadSize) {
+    if (columnBinary.isSetLoadSize) {
+      return LoadType.RLE_ARRAY;
+    }
     return LoadType.ARRAY;
   }
 
@@ -151,7 +155,8 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
   }
 
   private void loadFromExpandColumnBinary(
-      final ColumnBinary columnBinary, final IArrayLoader loader) throws IOException {
+      final ColumnBinary columnBinary, final IRunLengthEncodingArrayLoader loader)
+      throws IOException {
     ICompressor compressor = FindCompressor.get(columnBinary.compressorClassName);
     byte[] decompressBuffer =
         compressor.decompress(
@@ -164,21 +169,29 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
     //   LoadSize is less than real size if repetitions include negative number.
     //   It is possible to be thrown ArrayIndexOutOfBoundsException.
     int minIndex = Integer.MAX_VALUE;
+    int rowGroupCount = 0;
     for (int i = 0; i < columnBinary.repetitions.length; i++) {
       if (columnBinary.repetitions[i] < 0) {
         throw new IOException("Repetition must be equal to or greater than 0.");
       }
-      if (columnBinary.repetitions[i] > 0 && minIndex > i) {
-        minIndex = i;
+      if (columnBinary.repetitions[i] > 0) {
+        if (minIndex > i) {
+          minIndex = i;
+        }
+        rowGroupCount++;
       }
     }
+    loader.setRowGroupCount(rowGroupCount);
+
     // NOTE: all null case.
     int nullOffset = 0;
     if (minIndex >= length) {
+      int rowGroupIndex = 0;
       for (int i = minIndex; i < columnBinary.repetitions.length; i++) {
-        for (int j = 0; j < columnBinary.repetitions[i]; j++) {
-          loader.setNull(nullOffset);
-          nullOffset++;
+        if (columnBinary.repetitions[i] > 0) {
+          loader.setNullAndRepetitions(nullOffset, columnBinary.repetitions[i], rowGroupIndex);
+          rowGroupIndex++;
+          nullOffset += columnBinary.repetitions[i];
         }
       }
       return;
@@ -187,6 +200,7 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
     int nextStart = 0;
     int currentIndex = 0;
     int childLength = 0;
+    rowGroupCount = 0; // NOTE: reset
     List<Integer> childRepetitions = new ArrayList<>();
     for (int i = 0; i < columnBinary.repetitions.length; i++) {
       if (columnBinary.repetitions[i] == 0) {
@@ -206,29 +220,21 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
         continue;
       }
       if (i >= length) {
-        for (int j = 0; j < columnBinary.repetitions[i]; j++) {
-          loader.setNull(currentIndex);
-          currentIndex++;
-        }
+        loader.setNullAndRepetitions(currentIndex, columnBinary.repetitions[i], rowGroupCount);
         // NOTE: child does not inherit parent's repetitions.
         childLength++;
         childRepetitions.add(1);
       } else {
         int arrayLength = buffer.get(i);
         if (arrayLength == 0) {
-          for (int j = 0; j < columnBinary.repetitions[i]; j++) {
-            loader.setNull(currentIndex);
-            currentIndex++;
-          }
+          loader.setNullAndRepetitions(currentIndex, columnBinary.repetitions[i], rowGroupCount);
           // NOTE: child does not inherit parent's repetitions.
           childLength++;
           childRepetitions.add(1);
         } else {
           int start = nextStart;
-          for (int j = 0; j < columnBinary.repetitions[i]; j++) {
-            loader.setArrayIndex(currentIndex, start, arrayLength);
-            currentIndex++;
-          }
+          loader.setRowGourpIndexAndRepetitions(
+              currentIndex, columnBinary.repetitions[i], rowGroupCount, start, arrayLength);
           nextStart += arrayLength;
           // NOTE: child does not inherit parent's repetitions.
           childLength += arrayLength;
@@ -237,6 +243,8 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
           }
         }
       }
+      currentIndex += columnBinary.repetitions[i];
+      rowGroupCount++;
     }
 
     // NOTE: load child.
@@ -248,13 +256,15 @@ public class DumpArrayColumnBinaryMaker implements IColumnBinaryMaker {
 
   @Override
   public void load(final ColumnBinary columnBinary, final ILoader loader) throws IOException {
-    if (loader.getLoaderType() != LoadType.ARRAY) {
-      throw new IOException("Loader type is not ARRAY.");
-    }
-
     if (columnBinary.isSetLoadSize) {
-      loadFromExpandColumnBinary(columnBinary, (IArrayLoader) loader);
+      if (loader.getLoaderType() != LoadType.RLE_ARRAY) {
+        throw new IOException( "Loader type is not RLE ARRAY." );
+      }
+      loadFromExpandColumnBinary(columnBinary, (IRunLengthEncodingArrayLoader) loader);
     } else {
+      if (loader.getLoaderType() != LoadType.ARRAY) {
+        throw new IOException("Loader type is not ARRAY.");
+      }
       loadFromColumnBinary(columnBinary, (IArrayLoader) loader);
     }
     loader.finish();
