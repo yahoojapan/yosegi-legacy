@@ -239,7 +239,7 @@ public class UnsafeRangeDumpDoubleColumnBinaryMaker implements IColumnBinaryMake
           throw new IOException("Repetition must be equal to or greater than 0.");
         }
         // FIXME: continue if null
-        if (i > lastIndex || nullReader.getByte() == (byte) 0 || columnBinary.repetitions[i] == 0) {
+        if (i > lastIndex || nullReader.getByte() != (byte) 0 || columnBinary.repetitions[i] == 0) {
           continue;
         }
         dictionarySize++;

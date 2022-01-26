@@ -167,6 +167,8 @@ public class DumpBytesColumnBinaryMaker implements IColumnBinaryMaker {
         int objLength = dicBuffer.getInt();
         loader.setBytes(i, binary, dicBuffer.position(), objLength);
         dicBuffer.position(dicBuffer.position() + objLength);
+      } else {
+        loader.setNull(i);
       }
     }
     // NOTE: null padding up to load size.
